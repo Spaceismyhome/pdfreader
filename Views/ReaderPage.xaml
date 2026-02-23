@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="pdfreader.Views.ReaderPage"
+             Title="ReaderPage">
+
+    <VerticalStackLayout>
+        <!-- Controls Section -->
+        <Grid ColumnDefinitions="*,*,*,*,*" Padding="10" ColumnSpacing="5">
+            <Button Grid.Column="0"
+                    Text="◀️"
+                    Clicked="OnPreviousPageClicked"
+                    FontSize="14" />
+
+            <Button Grid.Column="1"
+                    Text="▶️ Read"
+                    Clicked="OnReadResumeClicked"
+                    FontSize="14" />
+
+            <Button Grid.Column="2"
+                    Text="⏸️ Pause"
+                    Clicked="OnPauseClicked"
+                    FontSize="14" />
+
+            <Button Grid.Column="3"
+                    Text="▶️ Next"
+                    Clicked="OnNextPageClicked"
+                    FontSize="14" />
+
+            <Label Grid.Column="4"
+                   x:Name="PageLabel"
+                   Text="Page: 1"
+                   VerticalOptions="Center"
+                   HorizontalOptions="End"
+                   FontSize="14" />
+        </Grid>
+
+
+        <!-- Speed Controls -->
+        <Grid ColumnDefinitions="Auto,*,Auto"
+      Padding="10"
+      ColumnSpacing="10">
+
+            <Button Grid.Column="0"
+            Text="🐢 Slow"
+            FontSize="12"
+            Clicked="OnSlowClicked" />
+
+            <Label Grid.Column="1"
+           x:Name="SpeedLabel"
+           Text="Speed: 0.4x"
+           HorizontalOptions="Center"
+           VerticalOptions="Center"
+           FontSize="12"
+           TextColor="Gray" />
+
+            <Button Grid.Column="2"
+            Text="🐇 Fast"
+            FontSize="12"
+            Clicked="OnFastClicked" />
+        </Grid>
+
+
+        <!-- Reading Progress -->
+        <ProgressBar x:Name="ReadingProgress"
+                     Progress="0"
+                     Margin="10,0"
+                     HeightRequest="5" />
+
+        <!-- Status Label -->
+        <Label x:Name="StatusLabel"
+               Text="Ready to read"
+               HorizontalOptions="Center"
+               FontSize="12"
+               TextColor="Gray" />
+
+        <!-- Current Text Highlight Display -->
+        <Frame Margin="10"
+               BackgroundColor="LightYellow"
+               Padding="10"
+               CornerRadius="5">
+            <Label x:Name="HighlightLabel"
+                   Text="Text will appear here as it's being read..."
+                   FontSize="14"
+                   LineBreakMode="WordWrap"
+                   MaxLines="3" />
+        </Frame>
+
+        <!-- PDF Viewer -->
+        <WebView 
+            x:Name="PdfWebView"
+            HeightRequest="600" />
+
+    </VerticalStackLayout>
+
+</ContentPage>

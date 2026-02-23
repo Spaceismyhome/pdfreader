@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="pdfreader.MainPage"
+             Title="MyLibrary">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="20">
+            <Button Text="Add Book" 
+                Clicked="OnAddBookClicked"
+                BackgroundColor="#0078D7"
+                TextColor="White"
+                CornerRadius="10"
+                Margin="0,10"/>
+
+            <CollectionView x:Name="BooksCollection"
+                SelectionMode="Single"
+                SelectionChanged="OnBookSelected">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Border Stroke="LightGray" Margin="10" Padding="10" StrokeThickness="1" BackgroundColor="Transparent">
+                            <StackLayout>
+                                <Label Text="{Binding Title}" FontSize="18"/>
+                                <Label Text="{Binding FileType}" FontSize="12" TextColor="Gray"/>
+                            </StackLayout>
+                        </Border>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>
