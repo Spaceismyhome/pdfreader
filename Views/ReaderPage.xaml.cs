@@ -10,13 +10,14 @@ public partial class ReaderPage : ContentPage
     private readonly string _filePath;
     private bool _isPaused = false;
     private bool _isReading = false;
-    private double _speechRate = 0.4;
+    private double _speechRate = 0.2;
     private const double MinRate = 0.25;
     private const double MaxRate = 1.0;
     private int _currentPage = 1;
     private int _currentChunkIndex = 0;
     private Dictionary<int, string> _pageFullText = new Dictionary<int, string>();
     private int _totalPages = 0;
+    private PdfDocument? _pdfDocument;
     private CancellationTokenSource? _cancellationTokenSource;
     private List<string> _currentPageChunks = new List<string>(); // Store chunks for current page
 
@@ -26,42 +27,19 @@ public partial class ReaderPage : ContentPage
         _filePath = filePath;
         Title = Path.GetFileNameWithoutExtension(filePath);
 
-        PdfWebView.Source = new UrlWebViewSource
-        {
-            Url = $"file:///{_filePath.Replace("\\", "/")}"
-        };
-
-        ExtractAllPagesText();
-
-        PageLabel.Text = $"Page: {_currentPage}";
-        StatusLabel.Text = $"Loaded {_totalPages} pages";
-    }
-    private void ExtractAllPagesText()
-    {
         try
         {
-            using var document = PdfDocument.Open(_filePath);
-            _totalPages = document.NumberOfPages;
-
-            for (int pageNumber = 1; pageNumber <= _totalPages; pageNumber++)
-            {
-                try
-                {
-                    var page = document.GetPage(pageNumber);
-                    _pageFullText[pageNumber] = page.Text;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error extracting page {pageNumber}: {ex.Message}");
-                    _pageFullText[pageNumber] = string.Empty;
-                }
-            }
+            _pdfDocument = PdfDocument.Open(_filePath);
+            _totalPages = _pdfDocument.NumberOfPages;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error opening PDF: {ex.Message}");
             StatusLabel.Text = "Error loading PDF";
         }
+
+        PageLabel.Text = $"Page: {_currentPage}";
+        StatusLabel.Text = $"Loaded {_totalPages} pages";
     }
 
     private void OnSlowClicked(object sender, EventArgs e)
@@ -82,6 +60,19 @@ public partial class ReaderPage : ContentPage
             _speechRate = MaxRate;
 
         SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
+    }
+
+    private async Task LoadPdfAsync()
+    {
+        await Task.Delay(100); // let UI render first
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PdfWebView.Source = new UrlWebViewSource
+            {
+                Url = $"file:///{_filePath.Replace("\\", "/")}"
+            };
+        });
     }
 
     [Obsolete]
@@ -160,16 +151,22 @@ public partial class ReaderPage : ContentPage
                 // Update PDF viewer
                 await UpdatePdfViewerToPage(pageNum);
 
-                if (_pageFullText.TryGetValue(pageNum, out var pageText) && !string.IsNullOrWhiteSpace(pageText))
+                if (!_pageFullText.ContainsKey(pageNum))
                 {
-                    // Read this page starting from saved position
-                    await ReadPageFromPosition(pageText, pageNum);
-
-                    if (_isPaused)
+                    if (_pdfDocument != null)
                     {
-                        StatusLabel.Text = $"Paused at page {_currentPage}";
-                        break;
+                        var page = _pdfDocument.GetPage(pageNum);
+                        _pageFullText[pageNum] = page.Text;
                     }
+                }
+
+                var pageText = _pageFullText.ContainsKey(pageNum)
+                    ? _pageFullText[pageNum]
+                    : string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(pageText))
+                {
+                    await ReadPageFromPosition(pageText, pageNum);
                 }
 
                 // Reset for next page (only if we finished this page)
@@ -448,21 +445,12 @@ public partial class ReaderPage : ContentPage
     {
         _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
 
-        try
+        MainThread.BeginInvokeOnMainThread(() =>
         {
-            var pageUrl = $"file:///{_filePath.Replace("\\", "/")}#page={_currentPage}";
+            PageLabel.Text = $"Page: {_currentPage}";
+        });
 
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                PdfWebView.Source = new UrlWebViewSource { Url = pageUrl };
-            });
-
-            await Task.Delay(500);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error updating PDF viewer: {ex.Message}");
-        }
+        // Do NOT reload WebView anymore
     }
 
     private string CleanTextForReading(string text)
@@ -515,6 +503,11 @@ public partial class ReaderPage : ContentPage
         }
     }
 
+    protected override async void OnAppearing()
+    {
+        base.OnAppearing();
+        await LoadPdfAsync();
+    }
     protected override void OnDisappearing()
     {
         base.OnDisappearing();
@@ -522,5 +515,7 @@ public partial class ReaderPage : ContentPage
         _cancellationTokenSource?.Cancel();
         _isPaused = true;
         _isReading = false;
+
+        _pdfDocument?.Dispose();
     }
 }
