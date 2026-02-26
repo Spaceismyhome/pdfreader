@@ -18,11 +18,28 @@
                 SelectionChanged="OnBookSelected">
                 <CollectionView.ItemTemplate>
                     <DataTemplate>
-                        <Border Stroke="LightGray" Margin="10" Padding="10" StrokeThickness="1" BackgroundColor="Transparent">
-                            <StackLayout>
-                                <Label Text="{Binding Title}" FontSize="18"/>
-                                <Label Text="{Binding FileType}" FontSize="12" TextColor="Gray"/>
-                            </StackLayout>
+                        <Border Stroke="LightGray"
+                                Margin="10"
+                                Padding="10"
+                                StrokeThickness="1"
+                                BackgroundColor="Transparent">
+                            <Grid ColumnDefinitions="*,40">
+                                <StackLayout>
+                                    <Label Text="{Binding Title}" FontSize="18"/>
+                                    <Label Text="{Binding FileType}" FontSize="12" TextColor="Gray"/>
+                                </StackLayout>
+                                <Button Text="✕"
+                                        Grid.Column="1"
+                                        BackgroundColor="Transparent"
+                                        TextColor="Red"
+                                        FontSize="20"
+                                        WidthRequest="35"
+                                        HeightRequest="35"
+                                        HorizontalOptions="End"
+                                        VerticalOptions="Center"
+                                        CommandParameter="{Binding .}"
+                                        Clicked="OnDeleteBookClicked"/>
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>

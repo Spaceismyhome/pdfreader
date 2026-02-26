@@ -10,15 +10,18 @@ public partial class ReaderPage : ContentPage
     private readonly string _filePath;
     private bool _isPaused = false;
     private bool _isReading = false;
-    private double _speechRate = 0.4;
+    private double _speechRate = 0.1;
     private const double MinRate = 0.25;
     private const double MaxRate = 1.0;
     private int _currentPage = 1;
     private int _currentChunkIndex = 0;
     private Dictionary<int, string> _pageFullText = new Dictionary<int, string>();
     private int _totalPages = 0;
+    private PdfDocument? _pdfDocument;
     private CancellationTokenSource? _cancellationTokenSource;
-    private List<string> _currentPageChunks = new List<string>(); // Store chunks for current page
+    private List<string> _currentPageChunks = new List<string>();
+    private readonly object _lockObject = new object();
+    private bool _isDisposing = false;
 
     public ReaderPage(string filePath)
     {
@@ -26,73 +29,67 @@ public partial class ReaderPage : ContentPage
         _filePath = filePath;
         Title = Path.GetFileNameWithoutExtension(filePath);
 
-        PdfWebView.Source = new UrlWebViewSource
-        {
-            Url = $"file:///{_filePath.Replace("\\", "/")}"
-        };
-
-        ExtractAllPagesText();
-
-        PageLabel.Text = $"Page: {_currentPage}";
-        StatusLabel.Text = $"Loaded {_totalPages} pages";
-    }
-    private void ExtractAllPagesText()
-    {
         try
         {
-            using var document = PdfDocument.Open(_filePath);
-            _totalPages = document.NumberOfPages;
-
-            for (int pageNumber = 1; pageNumber <= _totalPages; pageNumber++)
-            {
-                try
-                {
-                    var page = document.GetPage(pageNumber);
-                    _pageFullText[pageNumber] = page.Text;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Error extracting page {pageNumber}: {ex.Message}");
-                    _pageFullText[pageNumber] = string.Empty;
-                }
-            }
+            _pdfDocument = PdfDocument.Open(_filePath);
+            _totalPages = _pdfDocument.NumberOfPages;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error opening PDF: {ex.Message}");
-            StatusLabel.Text = "Error loading PDF";
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                StatusLabel.Text = "Error loading PDF";
+            });
         }
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PageLabel.Text = $"Page: {_currentPage}";
+            StatusLabel.Text = $"Loaded {_totalPages} pages";
+            SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
+        });
     }
 
     private void OnSlowClicked(object sender, EventArgs e)
     {
-        _speechRate -= 0.1;
-
-        if (_speechRate < MinRate)
-            _speechRate = MinRate;
-
+        _speechRate = Math.Max(MinRate, _speechRate - 0.1);
         SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
     }
 
     private void OnFastClicked(object sender, EventArgs e)
     {
-        _speechRate += 0.1;
-
-        if (_speechRate > MaxRate)
-            _speechRate = MaxRate;
-
+        _speechRate = Math.Min(MaxRate, _speechRate + 0.1);
         SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
     }
 
-    [Obsolete]
+    private async Task LoadPdfAsync()
+    {
+        await Task.Delay(100);
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            try
+            {
+                PdfWebView.Source = new UrlWebViewSource
+                {
+                    Url = $"file:///{_filePath.Replace("\\", "/")}"
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading PDF viewer: {ex.Message}");
+                StatusLabel.Text = "Error displaying PDF";
+            }
+        });
+    }
+
     private async void OnReadResumeClicked(object sender, EventArgs e)
     {
         if (_isReading && !_isPaused)
-        {
-            return; // Already reading
-        }
+            return;
 
-        if (!_isReading) // Starting fresh
+        if (!_isReading)
         {
             string result = await DisplayPromptAsync(
                 "Start Reading",
@@ -102,149 +99,220 @@ public partial class ReaderPage : ContentPage
 
             if (!int.TryParse(result, out int startPage) || startPage < 1 || startPage > _totalPages)
             {
-                await DisplayAlert("Invalid", $"Please enter a valid page number between 1 and {_totalPages}.", "OK");
+                await DisplayAlertAsync("Invalid", $"Please enter a valid page number between 1 and {_totalPages}.", "OK");
                 return;
             }
 
-            _currentPage = startPage;
-            _currentChunkIndex = 0; // Start from beginning
-            _currentPageChunks.Clear(); // Clear previous chunks
+            lock (_lockObject)
+            {
+                _currentPage = startPage;
+                _currentChunkIndex = 0;
+                _currentPageChunks.Clear();
+            }
 
-            // Update the PDF viewer
             await UpdatePdfViewerToPage(_currentPage);
         }
 
-        _isPaused = false;
-        _isReading = true;
-        StatusLabel.Text = $"Reading page {_currentPage}";
+        lock (_lockObject)
+        {
+            _isPaused = false;
+            _isReading = true;
+        }
 
-        // Start or continue reading
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            StatusLabel.Text = $"Reading page {_currentPage}";
+        });
+
         await ReadFromCurrentPosition();
     }
 
     private void OnPauseClicked(object sender, EventArgs e)
     {
-        if (_isReading)
+        lock (_lockObject)
         {
-            _isPaused = true;
-            StatusLabel.Text = $"Paused at page {_currentPage}";
-
-            // Cancel any ongoing speech
-            _cancellationTokenSource?.Cancel();
+            if (_isReading)
+            {
+                _isPaused = true;
+                _cancellationTokenSource?.Cancel();
+            }
         }
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            StatusLabel.Text = $"Paused at page {_currentPage}";
+        });
     }
 
-    [Obsolete]
     private async Task ReadFromCurrentPosition()
     {
+        // Cancel any existing speech
+        _cancellationTokenSource?.Cancel();
+
+        // Create new cancellation token
         _cancellationTokenSource = new CancellationTokenSource();
+        var cancellationToken = _cancellationTokenSource.Token;
 
         try
         {
-            // Start from current page
-            for (int pageNum = _currentPage; pageNum <= _totalPages; pageNum++)
+            int currentPage;
+            lock (_lockObject)
             {
-                if (_isPaused || _cancellationTokenSource.Token.IsCancellationRequested)
+                currentPage = _currentPage;
+            }
+
+            for (int pageNum = currentPage; pageNum <= _totalPages; pageNum++)
+            {
+                // Check if paused or cancelled
+                if (cancellationToken.IsCancellationRequested)
                     break;
 
-                _currentPage = pageNum;
+                lock (_lockObject)
+                {
+                    if (_isPaused)
+                        break;
+                    _currentPage = pageNum;
+                }
 
                 // Update UI
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    PageLabel.Text = $"Page: {_currentPage}";
-                    ReadingProgress.Progress = (double)_currentPage / _totalPages;
-                    StatusLabel.Text = $"Reading page {_currentPage}";
+                    PageLabel.Text = $"Page: {pageNum}";
+                    ReadingProgress.Progress = (double)pageNum / _totalPages;
+                    StatusLabel.Text = $"Reading page {pageNum}";
                 });
 
                 // Update PDF viewer
                 await UpdatePdfViewerToPage(pageNum);
 
-                if (_pageFullText.TryGetValue(pageNum, out var pageText) && !string.IsNullOrWhiteSpace(pageText))
+                // Get page text
+                string pageText;
+                lock (_lockObject)
                 {
-                    // Read this page starting from saved position
-                    await ReadPageFromPosition(pageText, pageNum);
-
-                    if (_isPaused)
+                    if (!_pageFullText.ContainsKey(pageNum))
                     {
-                        StatusLabel.Text = $"Paused at page {_currentPage}";
-                        break;
+                        if (_pdfDocument != null)
+                        {
+                            var page = _pdfDocument.GetPage(pageNum);
+                            _pageFullText[pageNum] = page.Text;
+                        }
                     }
+                    pageText = _pageFullText.ContainsKey(pageNum)
+                        ? _pageFullText[pageNum]
+                        : string.Empty;
                 }
 
-                // Reset for next page (only if we finished this page)
-                _currentChunkIndex = 0;
-                _currentPageChunks.Clear();
-
-                // Small delay between pages
-                await Task.Delay(300);
-            }
-
-            // If we finished all pages
-            if (!_isPaused && !_cancellationTokenSource.Token.IsCancellationRequested)
-            {
-                MainThread.BeginInvokeOnMainThread(() =>
+                if (!string.IsNullOrWhiteSpace(pageText))
                 {
-                    _isReading = false;
+                    bool completed = await ReadPageFromPosition(pageText, pageNum, cancellationToken);
+                    if (!completed)
+                        break;
+                }
+
+                // Reset for next page
+                lock (_lockObject)
+                {
                     _currentChunkIndex = 0;
                     _currentPageChunks.Clear();
-                    StatusLabel.Text = "Reading complete";
-                    ReadingProgress.Progress = 1.0;
-                });
+                }
 
-                await DisplayAlert("Complete", "Finished reading the document.", "OK");
+                // Small delay between pages
+                await Task.Delay(300, cancellationToken);
             }
+
+            // Check if we completed all pages
+            lock (_lockObject)
+            {
+                if (!_isPaused && !cancellationToken.IsCancellationRequested && !_isDisposing)
+                {
+                    MainThread.BeginInvokeOnMainThread(async () =>
+                    {
+                        _isReading = false;
+                        _currentChunkIndex = 0;
+                        _currentPageChunks.Clear();
+                        StatusLabel.Text = "Reading complete";
+                        ReadingProgress.Progress = 1.0;
+                        await DisplayAlert("Complete", "Finished reading the document.", "OK");
+                    });
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when cancelling
+            Console.WriteLine("Reading cancelled");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error reading: {ex.Message}");
-            StatusLabel.Text = "Error during reading";
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                StatusLabel.Text = "Error during reading";
+            });
         }
     }
 
-    private async Task ReadPageFromPosition(string pageText, int pageNum)
+    private async Task<bool> ReadPageFromPosition(string pageText, int pageNum, CancellationToken cancellationToken)
     {
         // Clean the text
         var cleanText = CleanTextForReading(pageText);
 
         // Split into chunks (only once per page)
-        if (_currentPageChunks.Count == 0)
+        List<string> chunks;
+        int startIndex;
+
+        lock (_lockObject)
         {
-            _currentPageChunks = SplitIntoSmartChunks(cleanText);
+            if (_currentPageChunks.Count == 0)
+            {
+                _currentPageChunks = SplitIntoSmartChunks(cleanText);
+            }
+            chunks = _currentPageChunks.ToList(); // Create a copy to avoid modification during iteration
+            startIndex = _currentChunkIndex;
         }
 
         // Start from saved chunk index
-        for (int i = _currentChunkIndex; i < _currentPageChunks.Count; i++)
+        for (int i = startIndex; i < chunks.Count; i++)
         {
-            if (_isPaused || _cancellationTokenSource.Token.IsCancellationRequested)
+            // Check for pause or cancellation
+            lock (_lockObject)
             {
-                // Save position BEFORE returning
+                if (_isPaused || cancellationToken.IsCancellationRequested)
+                {
+                    _currentChunkIndex = i;
+                    return false;
+                }
                 _currentChunkIndex = i;
-                return;
             }
 
-            var chunk = _currentPageChunks[i];
+            var chunk = chunks[i];
 
             // Update highlight display
             await UpdateHighlightDisplay(chunk, pageNum);
 
-            // Read the chunk
-            await TextToSpeech.SpeakAsync(
-                 chunk,
-                 new SpeechOptions
-                 {
-                     Rate = (float)_speechRate
-                 }
-             );
-
+            try
+            {
+                // Read the chunk
+                await TextToSpeech.SpeakAsync(
+                    chunk,
+                    new SpeechOptions
+                    {
+                        Rate = (float)_speechRate
+                    },
+                    cancellationToken
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
 
             // Small delay between chunks
-            await Task.Delay(30);
+            await Task.Delay(30, cancellationToken);
         }
 
-        // If we finished all chunks on this page, reset for next page
-        _currentChunkIndex = 0;
-        _currentPageChunks.Clear();
+        // Completed all chunks
+        return true;
     }
 
     private List<string> SplitIntoSmartChunks(string text)
@@ -296,16 +364,9 @@ public partial class ReaderPage : ContentPage
             return text;
 
         // Fix common abbreviation patterns
-        // Replace "Mr ." with "Mr." (with space before period)
         text = Regex.Replace(text, @"\b(Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr)\s*\.", "$1.", RegexOptions.IgnoreCase);
-
-        // Fix other common abbreviations
         text = Regex.Replace(text, @"\b(Inc|Ltd|Co|Corp|eg|ie|etc|vs)\s*\.", "$1.", RegexOptions.IgnoreCase);
-
-        // Fix initials: "J . K ." -> "J.K."
         text = Regex.Replace(text, @"\b([A-Z])\s*\.\s*([A-Z])\s*\.", "$1.$2.");
-
-        // Fix single initials: "J ." -> "J."
         text = Regex.Replace(text, @"\b([A-Z])\s*\.", "$1.");
 
         return text;
@@ -317,7 +378,6 @@ public partial class ReaderPage : ContentPage
         if (string.IsNullOrWhiteSpace(paragraph))
             return sentences;
 
-        // Simple state machine to handle sentences with abbreviations
         int start = 0;
         int position = 0;
 
@@ -325,22 +385,18 @@ public partial class ReaderPage : ContentPage
         {
             char c = paragraph[position];
 
-            // Check for potential sentence endings
             if (c == '.' || c == '!' || c == '?')
             {
-                // Check if it's really a sentence end (not an abbreviation)
                 bool isSentenceEnd = IsTrueSentenceEnd(paragraph, position);
 
                 if (isSentenceEnd)
                 {
-                    // Extract the sentence
                     string sentence = paragraph.Substring(start, position - start + 1).Trim();
                     if (!string.IsNullOrWhiteSpace(sentence))
                     {
                         sentences.Add(sentence);
                     }
 
-                    // Move to next potential sentence
                     start = position + 1;
                     while (start < paragraph.Length && char.IsWhiteSpace(paragraph[start]))
                     {
@@ -360,7 +416,6 @@ public partial class ReaderPage : ContentPage
             }
         }
 
-        // Add any remaining text
         if (start < paragraph.Length)
         {
             string remaining = paragraph.Substring(start).Trim();
@@ -375,13 +430,9 @@ public partial class ReaderPage : ContentPage
 
     private bool IsTrueSentenceEnd(string text, int position)
     {
-        // Check if the period at 'position' is a true sentence end
-
-        // If at end of text, it's a sentence end
         if (position >= text.Length - 1)
             return true;
 
-        // Look at next non-whitespace character
         int nextPos = position + 1;
         while (nextPos < text.Length && char.IsWhiteSpace(text[nextPos]))
         {
@@ -393,33 +444,27 @@ public partial class ReaderPage : ContentPage
 
         char nextChar = text[nextPos];
 
-        // If next character is uppercase, it's likely a new sentence
-        // But we need to check if this was an abbreviation
         if (char.IsUpper(nextChar))
         {
-            // Check if the word before the period is an abbreviation
             int wordStart = position - 1;
             while (wordStart >= 0 && char.IsLetter(text[wordStart]))
             {
                 wordStart--;
             }
 
-            wordStart++; // Move to first letter
+            wordStart++;
 
             string word = text.Substring(wordStart, position - wordStart).ToLower();
 
-            // Common abbreviations that DON'T end sentences
             var abbreviations = new HashSet<string>
             {
                 "mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr",
                 "inc", "ltd", "co", "corp", "eg", "ie", "etc", "vs"
             };
 
-            // If it's an abbreviation, it's NOT a sentence end
             if (abbreviations.Contains(word))
                 return false;
 
-            // Single letters are usually initials, not sentence ends
             if (word.Length == 1)
                 return false;
 
@@ -433,11 +478,9 @@ public partial class ReaderPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            // Show the text being read
             HighlightLabel.Text = text;
             HighlightLabel.BackgroundColor = Colors.Yellow;
 
-            // Animate the highlight
             var animation = new Animation(v => HighlightLabel.BackgroundColor =
                 Color.FromRgba(255, 255, 0, v), 1, 0.3);
             animation.Commit(HighlightLabel, "HighlightFade", length: 2000);
@@ -446,22 +489,26 @@ public partial class ReaderPage : ContentPage
 
     private async Task UpdatePdfViewerToPage(int pageNumber)
     {
-        _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
+        lock (_lockObject)
+        {
+            _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
+        }
 
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PageLabel.Text = $"Page: {_currentPage}";
+        });
+
+        // Note: PDF viewer update using JavaScript scroll to page
+        // This depends on your PDF viewer's capabilities
         try
         {
-            var pageUrl = $"file:///{_filePath.Replace("\\", "/")}#page={_currentPage}";
-
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                PdfWebView.Source = new UrlWebViewSource { Url = pageUrl };
-            });
-
-            await Task.Delay(500);
+            await PdfWebView.EvaluateJavaScriptAsync($"scrollToPage({_currentPage})");
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine($"Error updating PDF viewer: {ex.Message}");
+            // JavaScript not available or PDF viewer doesn't support scrolling
+            // You may need to reload the PDF with a different approach
         }
     }
 
@@ -470,10 +517,7 @@ public partial class ReaderPage : ContentPage
         if (string.IsNullOrWhiteSpace(text))
             return text;
 
-        // Remove multiple spaces
         text = Regex.Replace(text, @"\s+", " ");
-
-        // Fix line breaks
         text = Regex.Replace(text, @"\r\n|\n\r|\n|\r", " ");
 
         return text.Trim();
@@ -481,46 +525,172 @@ public partial class ReaderPage : ContentPage
 
     private async void OnNextPageClicked(object sender, EventArgs e)
     {
-        if (_currentPage < _totalPages)
+        lock (_lockObject)
         {
-            _currentPage++;
-            await UpdatePdfViewerToPage(_currentPage);
-
-            if (_isReading)
+            if (_currentPage < _totalPages)
             {
-                _isPaused = true;
-                StatusLabel.Text = $"Moved to page {_currentPage}";
-                _currentChunkIndex = 0;
-                _currentPageChunks.Clear();
-                await Task.Delay(100);
+                _currentPage++;
+
+                if (_isReading)
+                {
+                    _isPaused = true;
+                    _cancellationTokenSource?.Cancel();
+                    _currentChunkIndex = 0;
+                    _currentPageChunks.Clear();
+                }
             }
         }
+
+        await UpdatePdfViewerToPage(_currentPage);
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            StatusLabel.Text = $"Moved to page {_currentPage}";
+        });
     }
 
     private async void OnPreviousPageClicked(object sender, EventArgs e)
     {
-        if (_currentPage > 1)
+        lock (_lockObject)
         {
-            _currentPage--;
-            await UpdatePdfViewerToPage(_currentPage);
-
-            if (_isReading)
+            if (_currentPage > 1)
             {
-                _isPaused = true;
-                StatusLabel.Text = $"Moved to page {_currentPage}";
-                _currentChunkIndex = 0;
-                _currentPageChunks.Clear();
-                await Task.Delay(100);
+                _currentPage--;
+
+                if (_isReading)
+                {
+                    _isPaused = true;
+                    _cancellationTokenSource?.Cancel();
+                    _currentChunkIndex = 0;
+                    _currentPageChunks.Clear();
+                }
             }
+        }
+
+        await UpdatePdfViewerToPage(_currentPage);
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            StatusLabel.Text = $"Moved to page {_currentPage}";
+        });
+    }
+
+    private async Task SaveReadingPositionAsync()
+    {
+        try
+        {
+            lock (_lockObject)
+            {
+                Preferences.Set($"{_filePath}_Page", _currentPage);
+                Preferences.Set($"{_filePath}_Chunk", _currentChunkIndex);
+                Preferences.Set($"{_filePath}_Rate", _speechRate);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving position: {ex.Message}");
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task LoadReadingPositionAsync()
+    {
+        try
+        {
+            int savedPage = Preferences.Get($"{_filePath}_Page", 1);
+            int savedChunk = Preferences.Get($"{_filePath}_Chunk", 0);
+            double savedRate = Preferences.Get($"{_filePath}_Rate", 0.4);
+
+            if (savedPage > 1)
+            {
+                bool resume = await DisplayAlert(
+                    "Resume Reading",
+                    $"Resume from page {savedPage}?",
+                    "Yes",
+                    "No");
+
+                lock (_lockObject)
+                {
+                    if (resume)
+                    {
+                        _currentPage = savedPage;
+                        _currentChunkIndex = savedChunk;
+                    }
+                    else
+                    {
+                        _currentPage = 1;
+                        _currentChunkIndex = 0;
+                    }
+                    _speechRate = savedRate;
+                }
+            }
+            else
+            {
+                lock (_lockObject)
+                {
+                    _currentPage = 1;
+                    _currentChunkIndex = 0;
+                    _speechRate = savedRate;
+                }
+            }
+
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                PageLabel.Text = $"Page: {_currentPage}";
+                SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading position: {ex.Message}");
         }
     }
 
-    protected override void OnDisappearing()
+    protected override async void OnAppearing()
     {
-        base.OnDisappearing();
-        //await SaveReadingPositionAsync();
-        _cancellationTokenSource?.Cancel();
-        _isPaused = true;
-        _isReading = false;
+        base.OnAppearing();
+        await LoadPdfAsync();
+        await LoadReadingPositionAsync();
+    }
+
+    protected override async void OnDisappearing()
+    {
+        _isDisposing = true;
+
+        try
+        {
+            await SaveReadingPositionAsync();
+
+            // Cancel any ongoing speech
+            _cancellationTokenSource?.Cancel();
+
+            // Wait a bit for cancellation to complete
+            await Task.Delay(100);
+
+            _cancellationTokenSource?.Dispose();
+            _cancellationTokenSource = null;
+
+            _isPaused = true;
+            _isReading = false;
+
+            // Clear dictionaries to free memory
+            lock (_lockObject)
+            {
+                _pageFullText.Clear();
+                _currentPageChunks.Clear();
+            }
+
+            _pdfDocument?.Dispose();
+            _pdfDocument = null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error during cleanup: {ex.Message}");
+        }
+        finally
+        {
+            base.OnDisappearing();
+        }
     }
 }

@@ -52,5 +52,32 @@ namespace pdfreader
                 cv.SelectedItem = null;
         }
 
+        private async void OnDeleteBookClicked(object sender, EventArgs e)
+        {
+            if (sender is Button button && button.CommandParameter is BookItem book)
+            {
+                bool confirm = await DisplayAlertAsync(
+                    "Delete Book",
+                    $"Are you sure you want to delete '{book.Title}'?",
+                    "Yes",
+                    "No");
+
+                if (!confirm)
+                    return;
+
+                // 1️⃣ Delete from database
+                await App.Database.DeleteBookAsync(book);
+
+                // 2️⃣ Remove from ObservableCollection (updates UI automatically)
+                Books.Remove(book);
+
+                // 3️⃣ OPTIONAL: Delete physical file
+                if (File.Exists(book.FilePath))
+                {
+                    File.Delete(book.FilePath);
+                }
+            }
+        }
+
     }
 }
