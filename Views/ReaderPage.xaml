@@ -48,7 +48,7 @@
 
             <Label Grid.Column="1"
            x:Name="SpeedLabel"
-           Text="Speed: 0.1x"
+           Text="Speed: 0.4x"
            HorizontalOptions="Center"
            VerticalOptions="Center"
            FontSize="12"
