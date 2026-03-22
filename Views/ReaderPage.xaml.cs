@@ -10,7 +10,7 @@ public partial class ReaderPage : ContentPage
     private readonly string _filePath;
     private bool _isPaused = false;
     private bool _isReading = false;
-    private double _speechRate = 0.1;
+    private double _speechRate = 0.4;
     private const double MinRate = 0.25;
     private const double MaxRate = 1.0;
     private int _currentPage = 1;
@@ -31,8 +31,22 @@ public partial class ReaderPage : ContentPage
 
         try
         {
-            _pdfDocument = PdfDocument.Open(_filePath);
-            _totalPages = _pdfDocument.NumberOfPages;
+            using var document = PdfDocument.Open(_filePath);
+            _totalPages = document.NumberOfPages;
+
+            for (int pageNumber = 1; pageNumber <= _totalPages; pageNumber++)
+            {
+                try
+                {
+                    var page = document.GetPage(pageNumber);
+                    _pageFullText[pageNumber] = page.Text;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error extracting page {pageNumber}: {ex.Message}");
+                    _pageFullText[pageNumber] = string.Empty;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -42,13 +56,6 @@ public partial class ReaderPage : ContentPage
                 StatusLabel.Text = "Error loading PDF";
             });
         }
-
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            PageLabel.Text = $"Page: {_currentPage}";
-            StatusLabel.Text = $"Loaded {_totalPages} pages";
-            SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
-        });
     }
 
     private void OnSlowClicked(object sender, EventArgs e)
@@ -84,6 +91,7 @@ public partial class ReaderPage : ContentPage
         });
     }
 
+    [Obsolete]
     private async void OnReadResumeClicked(object sender, EventArgs e)
     {
         if (_isReading && !_isPaused)
@@ -185,28 +193,16 @@ public partial class ReaderPage : ContentPage
                 // Update PDF viewer
                 await UpdatePdfViewerToPage(pageNum);
 
-                // Get page text
-                string pageText;
-                lock (_lockObject)
+                if (_pageFullText.TryGetValue(pageNum, out var pageText) && !string.IsNullOrWhiteSpace(pageText))
                 {
-                    if (!_pageFullText.ContainsKey(pageNum))
-                    {
-                        if (_pdfDocument != null)
-                        {
-                            var page = _pdfDocument.GetPage(pageNum);
-                            _pageFullText[pageNum] = page.Text;
-                        }
-                    }
-                    pageText = _pageFullText.ContainsKey(pageNum)
-                        ? _pageFullText[pageNum]
-                        : string.Empty;
-                }
+                    // Read this page starting from saved position
+                    await ReadPageFromPosition(pageText, pageNum);
 
-                if (!string.IsNullOrWhiteSpace(pageText))
-                {
-                    bool completed = await ReadPageFromPosition(pageText, pageNum, cancellationToken);
-                    if (!completed)
+                    if (_isPaused)
+                    {
+                        StatusLabel.Text = $"Paused at page {_currentPage}";
                         break;
+                    }
                 }
 
                 // Reset for next page
@@ -489,26 +485,22 @@ public partial class ReaderPage : ContentPage
 
     private async Task UpdatePdfViewerToPage(int pageNumber)
     {
-        lock (_lockObject)
-        {
-            _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
-        }
+        _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
 
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            PageLabel.Text = $"Page: {_currentPage}";
-        });
-
-        // Note: PDF viewer update using JavaScript scroll to page
-        // This depends on your PDF viewer's capabilities
         try
         {
-            await PdfWebView.EvaluateJavaScriptAsync($"scrollToPage({_currentPage})");
+            var pageUrl = $"file:///{_filePath.Replace("\\", "/")}#page={_currentPage}";
+
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                PdfWebView.Source = new UrlWebViewSource { Url = pageUrl };
+            });
+
+            await Task.Delay(500);
         }
-        catch
+        catch (Exception ex)
         {
-            // JavaScript not available or PDF viewer doesn't support scrolling
-            // You may need to reload the PDF with a different approach
+            Console.WriteLine($"Error updating PDF viewer: {ex.Message}");
         }
     }
 
@@ -654,43 +646,12 @@ public partial class ReaderPage : ContentPage
         await LoadReadingPositionAsync();
     }
 
-    protected override async void OnDisappearing()
+    protected override void OnDisappearing()
     {
-        _isDisposing = true;
-
-        try
-        {
-            await SaveReadingPositionAsync();
-
-            // Cancel any ongoing speech
-            _cancellationTokenSource?.Cancel();
-
-            // Wait a bit for cancellation to complete
-            await Task.Delay(100);
-
-            _cancellationTokenSource?.Dispose();
-            _cancellationTokenSource = null;
-
-            _isPaused = true;
-            _isReading = false;
-
-            // Clear dictionaries to free memory
-            lock (_lockObject)
-            {
-                _pageFullText.Clear();
-                _currentPageChunks.Clear();
-            }
-
-            _pdfDocument?.Dispose();
-            _pdfDocument = null;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error during cleanup: {ex.Message}");
-        }
-        finally
-        {
-            base.OnDisappearing();
-        }
+        base.OnDisappearing();
+        //await SaveReadingPositionAsync();
+        _cancellationTokenSource?.Cancel();
+        _isPaused = true;
+        _isReading = false;
     }
 }
