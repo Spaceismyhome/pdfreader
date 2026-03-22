@@ -75,6 +75,7 @@ public partial class ReaderPage : ContentPage
                 {
                     Url = $"file:///{_filePath.Replace("\\", "/")}"
                 };
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error loading PDF viewer: {ex.Message}");
@@ -201,39 +202,6 @@ public partial class ReaderPage : ContentPage
                         : string.Empty;
                 }
 
-                if (!string.IsNullOrWhiteSpace(pageText))
-                {
-                    bool completed = await ReadPageFromPosition(pageText, pageNum, cancellationToken);
-                    if (!completed)
-                    }
-                    pageText = _pageFullText.ContainsKey(pageNum)
-                        ? _pageFullText[pageNum]
-                        : string.Empty;
-                }
-
-<<<<<<<<< Temporary merge branch 1
-                var pageText = _pageFullText.ContainsKey(pageNum)
-                    ? _pageFullText[pageNum]
-                    : string.Empty;
-
-                if (!string.IsNullOrWhiteSpace(pageText))
-                {
-                    await ReadPageFromPosition(pageText, pageNum);
-                }
-
-                // Reset for next page (only if we finished this page)
-                _currentChunkIndex = 0;
-                _currentPageChunks.Clear();
-
-                // Small delay between pages
-                await Task.Delay(300);
-            }
-
-            // If we finished all pages
-            if (!_isPaused && !_cancellationTokenSource.Token.IsCancellationRequested)
-            {
-                MainThread.BeginInvokeOnMainThread(() =>
-=========
                 if (!string.IsNullOrWhiteSpace(pageText))
                 {
                     bool completed = await ReadPageFromPosition(pageText, pageNum, cancellationToken);
@@ -482,10 +450,14 @@ public partial class ReaderPage : ContentPage
             while (wordStart >= 0 && char.IsLetter(text[wordStart]))
             {
                 wordStart--;
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            PageLabel.Text = $"Page: {_currentPage}";
-        });
+            }
+
+            wordStart++;
+
+            string word = text.Substring(wordStart, position - wordStart).ToLower();
+
+            var abbreviations = new HashSet<string>
+            {
                 "mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr",
                 "inc", "ltd", "co", "corp", "eg", "ie", "etc", "vs"
             };
@@ -632,41 +604,42 @@ public partial class ReaderPage : ContentPage
 
             if (savedPage > 1)
             {
+                bool resume = await DisplayAlert(
+                    "Resume Reading",
+                    $"Resume from page {savedPage}?",
+                    "Yes",
+                    "No");
+
                 lock (_lockObject)
-        base.OnAppearing();
-        await LoadPdfAsync();
-        await LoadReadingPositionAsync();
-    }
-
-    protected override async void OnDisappearing()
-    {
-        _isDisposing = true;
-
-        try
-        {
-            await SaveReadingPositionAsync();
-
-            // Cancel any ongoing speech
-            _cancellationTokenSource?.Cancel();
-
-            // Wait a bit for cancellation to complete
-            await Task.Delay(100);
-
-            _cancellationTokenSource?.Dispose();
-            _cancellationTokenSource = null;
-
-            _isPaused = true;
-            _isReading = false;
-
-            // Clear dictionaries to free memory
-            lock (_lockObject)
+                {
+                    if (resume)
+                    {
+                        _currentPage = savedPage;
+                        _currentChunkIndex = savedChunk;
+                    }
+                    else
+                    {
+                        _currentPage = 1;
+                        _currentChunkIndex = 0;
+                    }
+                    _speechRate = savedRate;
+                }
+            }
+            else
             {
-                _pageFullText.Clear();
-                _currentPageChunks.Clear();
+                lock (_lockObject)
+                {
+                    _currentPage = 1;
+                    _currentChunkIndex = 0;
+                    _speechRate = savedRate;
+                }
             }
 
-            _pdfDocument?.Dispose();
-            _pdfDocument = null;
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                PageLabel.Text = $"Page: {_currentPage}";
+                SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
+            });
         }
         catch (Exception ex)
         {
@@ -675,12 +648,6 @@ public partial class ReaderPage : ContentPage
     }
 
     protected override async void OnAppearing()
-    {
-        base.OnAppearing();
-        await LoadPdfAsync();
-        await LoadReadingPositionAsync();
-    }
-
     {
         base.OnAppearing();
         await LoadPdfAsync();
