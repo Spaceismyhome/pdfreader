@@ -11,6 +11,14 @@ public partial class ReaderPage : ContentPage
     private bool _isPaused = false;
     private bool _isReading = false;
     private double _speechRate = 0.1;
+    private double _speechRate = 0.2;
+=========
+    private double _speechRate = 0.1;
+>>>>>>>>> Temporary merge branch 2
+    private double _speechRate = 0.2;
+=========
+    private double _speechRate = 0.1;
+>>>>>>>>> Temporary merge branch 2
     private const double MinRate = 0.25;
     private const double MaxRate = 1.0;
     private int _currentPage = 1;
@@ -31,17 +39,27 @@ public partial class ReaderPage : ContentPage
 
         try
         {
-            _pdfDocument = PdfDocument.Open(_filePath);
-            _totalPages = _pdfDocument.NumberOfPages;
+            using var document = PdfDocument.Open(_filePath);
+            _totalPages = document.NumberOfPages;
+
+            for (int pageNumber = 1; pageNumber <= _totalPages; pageNumber++)
+            {
+                try
+                {
+                    var page = document.GetPage(pageNumber);
+                    _pageFullText[pageNumber] = page.Text;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error extracting page {pageNumber}: {ex.Message}");
+                    _pageFullText[pageNumber] = string.Empty;
+                }
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error opening PDF: {ex.Message}");
             MainThread.BeginInvokeOnMainThread(() =>
-            {
-                StatusLabel.Text = "Error loading PDF";
-            });
-        }
 
         MainThread.BeginInvokeOnMainThread(() =>
         {
@@ -49,6 +67,15 @@ public partial class ReaderPage : ContentPage
             StatusLabel.Text = $"Loaded {_totalPages} pages";
             SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
         });
+        StatusLabel.Text = $"Loaded {_totalPages} pages";
+=========
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PageLabel.Text = $"Page: {_currentPage}";
+            StatusLabel.Text = $"Loaded {_totalPages} pages";
+            SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
+        });
+>>>>>>>>> Temporary merge branch 2
     }
 
     private void OnSlowClicked(object sender, EventArgs e)
@@ -75,7 +102,6 @@ public partial class ReaderPage : ContentPage
                 {
                     Url = $"file:///{_filePath.Replace("\\", "/")}"
                 };
-            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error loading PDF viewer: {ex.Message}");
@@ -84,6 +110,7 @@ public partial class ReaderPage : ContentPage
         });
     }
 
+>>>>>>>>> Temporary merge branch 2
     private async void OnReadResumeClicked(object sender, EventArgs e)
     {
         if (_isReading && !_isPaused)
@@ -176,15 +203,6 @@ public partial class ReaderPage : ContentPage
 
                 // Update UI
                 MainThread.BeginInvokeOnMainThread(() =>
-                {
-                    PageLabel.Text = $"Page: {pageNum}";
-                    ReadingProgress.Progress = (double)pageNum / _totalPages;
-                    StatusLabel.Text = $"Reading page {pageNum}";
-                });
-
-                // Update PDF viewer
-                await UpdatePdfViewerToPage(pageNum);
-
                 // Get page text
                 string pageText;
                 lock (_lockObject)
@@ -206,7 +224,49 @@ public partial class ReaderPage : ContentPage
                 {
                     bool completed = await ReadPageFromPosition(pageText, pageNum, cancellationToken);
                     if (!completed)
+                    if (!_pageFullText.ContainsKey(pageNum))
+                    {
+                        if (_pdfDocument != null)
+                        {
+                            var page = _pdfDocument.GetPage(pageNum);
+                            _pageFullText[pageNum] = page.Text;
+                        }
+>>>>>>>>> Temporary merge branch 2
+                    }
+                    pageText = _pageFullText.ContainsKey(pageNum)
+                        ? _pageFullText[pageNum]
+                        : string.Empty;
+                }
+
+<<<<<<<<< Temporary merge branch 1
+                var pageText = _pageFullText.ContainsKey(pageNum)
+                    ? _pageFullText[pageNum]
+                    : string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(pageText))
+                {
+                    await ReadPageFromPosition(pageText, pageNum);
+                }
+
+                // Reset for next page (only if we finished this page)
+                _currentChunkIndex = 0;
+                _currentPageChunks.Clear();
+
+                // Small delay between pages
+                await Task.Delay(300);
+            }
+
+            // If we finished all pages
+            if (!_isPaused && !_cancellationTokenSource.Token.IsCancellationRequested)
+            {
+                MainThread.BeginInvokeOnMainThread(() =>
+=========
+                if (!string.IsNullOrWhiteSpace(pageText))
+                {
+                    bool completed = await ReadPageFromPosition(pageText, pageNum, cancellationToken);
+                    if (!completed)
                         break;
+                    }
                 }
 
                 // Reset for next page
@@ -450,14 +510,10 @@ public partial class ReaderPage : ContentPage
             while (wordStart >= 0 && char.IsLetter(text[wordStart]))
             {
                 wordStart--;
-            }
-
-            wordStart++;
-
-            string word = text.Substring(wordStart, position - wordStart).ToLower();
-
-            var abbreviations = new HashSet<string>
-            {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PageLabel.Text = $"Page: {_currentPage}";
+        });
                 "mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr",
                 "inc", "ltd", "co", "corp", "eg", "ie", "etc", "vs"
             };
@@ -489,26 +545,25 @@ public partial class ReaderPage : ContentPage
 
     private async Task UpdatePdfViewerToPage(int pageNumber)
     {
-        lock (_lockObject)
-        {
-            _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
-        }
+        _currentPage = Math.Clamp(pageNumber, 1, _totalPages);
 
         MainThread.BeginInvokeOnMainThread(() =>
+<<<<<<<<< Temporary merge branch 1
         {
             PageLabel.Text = $"Page: {_currentPage}";
         });
 
-        // Note: PDF viewer update using JavaScript scroll to page
-        // This depends on your PDF viewer's capabilities
-        try
+        // Do NOT reload WebView anymore
+=========
         {
-            await PdfWebView.EvaluateJavaScriptAsync($"scrollToPage({_currentPage})");
+            PageLabel.Text = $"Page: {_currentPage}";
+        });
+
+            await Task.Delay(500);
         }
-        catch
+        catch (Exception ex)
         {
-            // JavaScript not available or PDF viewer doesn't support scrolling
-            // You may need to reload the PDF with a different approach
+            Console.WriteLine($"Error updating PDF viewer: {ex.Message}");
         }
     }
 
@@ -604,50 +659,59 @@ public partial class ReaderPage : ContentPage
 
             if (savedPage > 1)
             {
-                bool resume = await DisplayAlert(
-                    "Resume Reading",
-                    $"Resume from page {savedPage}?",
-                    "Yes",
-                    "No");
-
                 lock (_lockObject)
-                {
-                    if (resume)
-                    {
-                        _currentPage = savedPage;
-                        _currentChunkIndex = savedChunk;
-                    }
-                    else
-                    {
-                        _currentPage = 1;
-                        _currentChunkIndex = 0;
-                    }
-                    _speechRate = savedRate;
-                }
-            }
-            else
+        base.OnAppearing();
+        await LoadPdfAsync();
+        await LoadReadingPositionAsync();
+    }
+
+    protected override async void OnDisappearing()
+    {
+        _isDisposing = true;
+
+        try
+        {
+            await SaveReadingPositionAsync();
+
+            // Cancel any ongoing speech
+            _cancellationTokenSource?.Cancel();
+
+            // Wait a bit for cancellation to complete
+            await Task.Delay(100);
+
+            _cancellationTokenSource?.Dispose();
+            _cancellationTokenSource = null;
+
+            _isPaused = true;
+            _isReading = false;
+
+            // Clear dictionaries to free memory
+            lock (_lockObject)
             {
-                lock (_lockObject)
-                {
-                    _currentPage = 1;
-                    _currentChunkIndex = 0;
-                    _speechRate = savedRate;
-                }
+                _pageFullText.Clear();
+                _currentPageChunks.Clear();
             }
 
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                PageLabel.Text = $"Page: {_currentPage}";
-                SpeedLabel.Text = $"Speed: {_speechRate:F1}x";
-            });
+            _pdfDocument?.Dispose();
+            _pdfDocument = null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading position: {ex.Message}");
+            Console.WriteLine($"Error during cleanup: {ex.Message}");
         }
-    }
+        finally
+        {
+            base.OnDisappearing();
+        }
+    {
+        base.OnDisappearing();
+        //await SaveReadingPositionAsync();
+        _cancellationTokenSource?.Cancel();
+        _isPaused = true;
+        _isReading = false;
 
-    protected override async void OnAppearing()
+        _pdfDocument?.Dispose();
+=========
     {
         base.OnAppearing();
         await LoadPdfAsync();
@@ -692,5 +756,6 @@ public partial class ReaderPage : ContentPage
         {
             base.OnDisappearing();
         }
+>>>>>>>>> Temporary merge branch 2
     }
 }
